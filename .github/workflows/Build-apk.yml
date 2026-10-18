@@ -1,0 +1,89 @@
+
+name: Build Android APK
+
+on:
+  push:
+    paths-ignore:
+      - "downloads/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Prepare Gradle wrapper
+        run: |
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+          else
+            echo "ERROR: gradlew not found in repository root"
+            exit 1
+          fi
+
+      - name: Build Debug APK
+        id: build
+        continue-on-error: true
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Save build logs
+        if: always()
+        run: |
+          mkdir -p build-report
+          echo "Commit: $GITHUB_SHA" > build-report/build-info.txt
+          echo "Build result: ${{ steps.build.outcome }}" >> build-report/build-info.txt
+
+      - name: Upload APK and build report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-${{ github.run_number }}
+          path: |
+            **/build/outputs/apk/**/*.apk
+            build-report/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Stop if build failed
+        if: steps.build.outcome != 'success'
+        run: |
+          echo "APK build failed. Check the Build Android APK logs."
+          exit 1
+
+      - name: Copy APK to downloads
+        run: |
+          mkdir -p downloads
+          cp app/build/outputs/apk/debug/app-debug.apk downloads/app-debug.apk
+
+      - name: Publish APK in Code tab
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add downloads/app-debug.apk
+
+          if ! git diff --cached --quiet; then
+            git commit -m "Update debug APK [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          else
+            echo "APK has not changed."
+          fi
