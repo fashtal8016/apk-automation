@@ -1,0 +1,98 @@
+name: Android APK Build
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Validate Gradle Wrapper
+        run: |
+          test -f gradlew || {
+            echo "Gradle Wrapper is missing"
+            exit 1
+          }
+          chmod +x gradlew
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Collect APK
+        shell: bash
+        run: |
+          mkdir -p release-apk
+
+          find . -type f \
+            -path '*/build/outputs/apk/*/*.apk' \
+            -not -path '*/build/outputs/apk/*/androidTest/*' \
+            -exec cp {} release-apk/ \;
+
+          test -n "$(find release-apk -type f -name '*.apk' -print -quit)" || {
+            echo "No APK was generated"
+            exit 1
+          }
+
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          folder = Path("release-apk")
+          files = sorted(folder.glob("*.apk"))
+          repo = os.environ.get("GITHUB_REPOSITORY", "AndroidApp").split("/")[-1]
+
+          for index, path in enumerate(files, 1):
+              name = (
+                  f"{repo}-debug.apk"
+                  if index == 1
+                  else f"{repo}-debug-{index}.apk"
+              )
+              target = folder / name
+
+              if path != target:
+                  path.rename(target)
+
+          for path in sorted(folder.glob("*.apk")):
+              print(f"{path}: {path.stat().st_size} bytes")
+          PY
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: release-apk/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-apk/*.apk
+          generate_release_notes: true

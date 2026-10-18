@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">APK Automation</string>
+    <string name="tab_upload">آپلود و گیت‌هاب</string>
+    <string name="tab_workflow">ورک‌فلو build-apk</string>
+    <string name="tab_build">ساخت APK</string>
+    <string name="tab_dashboard">داشبورد</string>
+    <string name="btn_run_build">شروع ساخت APK</string>
+    <string name="btn_copy_yaml">کپی کد اکشن</string>
+    <string name="btn_save_workflow">ذخیره فایل در پروژه</string>
+    <string name="status_ready">آماده به کار</string>
+    <string name="status_building">در حال پردازش و ساخت...</string>
+    <string name="status_success">ساخت موفقیت‌آمیز بود</string>
+    <string name="status_error">خطا در فرآیند</string>
+</resources>
