@@ -2,88 +2,110 @@
 name: Build Android APK
 
 on:
+  workflow_dispatch:
   push:
+    branches:
+      - "**"
     paths-ignore:
       - "downloads/**"
-  workflow_dispatch:
 
 permissions:
   contents: write
 
-concurrency:
-  group: android-apk-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    name: Build APK
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
 
     steps:
-      - name: Checkout repository
+      - name: Checkout project
         uses: actions/checkout@v4
 
-      - name: Set up JDK
+      - name: Install Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Prepare Gradle wrapper
+      - name: Locate Gradle project
+        id: project
+        shell: bash
         run: |
-          if [ -f gradlew ]; then
-            chmod +x gradlew
-          else
-            echo "ERROR: gradlew not found in repository root"
+          echo "Repository files:"
+          ls -la
+          if [ ! -f gradlew ]; then
+            echo "::error::gradlew not found in repository root"
+            find . -maxdepth 4 \( -name gradlew -o -name settings.gradle -o -name settings.gradle.kts \) -print
             exit 1
           fi
+          chmod +x gradlew
 
-      - name: Build Debug APK
-        id: build
+      - name: Build debug APK and save log
+        id: compile
+        shell: bash
         continue-on-error: true
-        run: ./gradlew assembleDebug --stacktrace
-
-      - name: Save build logs
-        if: always()
         run: |
-          mkdir -p build-report
-          echo "Commit: $GITHUB_SHA" > build-report/build-info.txt
-          echo "Build result: ${{ steps.build.outcome }}" >> build-report/build-info.txt
+          set -o pipefail
+          ./gradlew assembleDebug --stacktrace --no-daemon 2>&1 | tee gradle-build.log
 
-      - name: Upload APK and build report
+      - name: Upload diagnostic log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-build-${{ github.run_number }}
-          path: |
-            **/build/outputs/apk/**/*.apk
-            build-report/**
+          name: gradle-build-log-${{ github.run_number }}
+          path: gradle-build.log
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Stop if build failed
-        if: steps.build.outcome != 'success'
+      - name: Stop on build failure
+        if: steps.compile.outcome != 'success'
         run: |
-          echo "APK build failed. Check the Build Android APK logs."
+          echo "::error::Gradle build failed. Download gradle-build.log from Artifacts."
           exit 1
 
-      - name: Copy APK to downloads
+      - name: Find generated APK
+        id: apk
+        shell: bash
+        run: |
+          APK="$(find . -type f -path '*/build/outputs/apk/debug/*.apk' \
+            ! -path './downloads/*' | head -n 1)"
+
+          if [ -z "$APK" ]; then
+            echo "::error::No debug APK was generated."
+            exit 1
+          fi
+
+          echo "Found APK: $APK"
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK for direct download
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-debug-APK
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Copy APK to repository
+        shell: bash
+        env:
+          APK_PATH: ${{ steps.apk.outputs.path }}
         run: |
           mkdir -p downloads
-          cp app/build/outputs/apk/debug/app-debug.apk downloads/app-debug.apk
+          cp "$APK_PATH" downloads/app-debug.apk
 
-      - name: Publish APK in Code tab
+      - name: Commit APK
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add downloads/app-debug.apk
 
           if ! git diff --cached --quiet; then
-            git commit -m "Update debug APK [skip ci]"
+            git commit -m "Update generated debug APK [skip ci]"
             git push origin "HEAD:${GITHUB_REF_NAME}"
           else
-            echo "APK has not changed."
+            echo "No APK changes to commit."
           fi
