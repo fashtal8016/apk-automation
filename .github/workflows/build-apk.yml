@@ -1,0 +1,100 @@
+
+name: Android APK Build and Debug
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test and Build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Verify Android project files
+        shell: bash
+        run: |
+          set -e
+          if [ ! -f gradlew ]; then
+            echo "::error::gradlew not found in repository root."
+            echo "Upload the project with its Gradle Wrapper."
+            exit 1
+          fi
+          if [ ! -f settings.gradle ] && [ ! -f settings.gradle.kts ]; then
+            echo "::error::settings.gradle or settings.gradle.kts not found."
+            exit 1
+          fi
+          chmod +x gradlew
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK
+        id: build_apk
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace --warning-mode all assembleDebug \
+            2>&1 | tee build-debug.log
+
+      - name: Run unit tests
+        if: success()
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace testDebugUnitTest \
+            2>&1 | tee unit-tests.log
+
+      - name: Collect APK and diagnostic reports
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p ci-output/reports
+          find . -type f -path "*/build/outputs/apk/*/*.apk" \
+            -exec cp --parents {} ci-output/ \; || true
+          find . -type f \( \
+            -path "*/build/reports/*" -o \
+            -path "*/build/test-results/*" \
+          \) -exec cp --parents {} ci-output/reports/ \; || true
+          for f in build-debug.log unit-tests.log; do
+            if [ -f "$f" ]; then
+              cp "$f" ci-output/reports/
+            fi
+          done
+
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: ci-output/**/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload diagnostic reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-diagnostics
+          path: ci-output/reports/
+          if-no-files-found: warn
+          retention-days: 14
